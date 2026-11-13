@@ -1,6 +1,6 @@
 # 安装、升级与故障排查
 
-当前版本 **1.6.84**。面向用户与协助安装的 Agent。支持的安装器环境：Linux CLI/Web；macOS Desktop；Windows 11 的 PowerShell 5.1/7。完整 Windows 宿主补丁及界面验收与安装器测试分开，不能因安装通过就宣称全部功能正常。
+当前版本 **1.6.97**。面向用户与协助安装的 Agent。支持的安装器环境：Linux CLI/Web；macOS Desktop；Windows 11 的 PowerShell 5.1/7。完整 Windows 宿主补丁及界面验收与安装器测试分开，不能因安装通过就宣称全部功能正常。
 
 ## 安装前
 
@@ -214,3 +214,15 @@ macOS 不复制顶层 `Info.plist`，不创建 `.app` 路径，不通过 Finder�
 明确指定 `DSH_APP` / `DSH_EXE` 的目标校验失败后即停止，不会自动换到另一份应用。维护代码不遍历挂载卷、工作目录或任意参数的父目录；自定义安装请提供实际路径。显式请求自动发现时，仍可查询已知默认位置和系统登记，但多个有效目标需要用户选择。
 
 架构分目录运行时按当前执行进程的 `process.arch` 选择，不跨架构猜测。官方 CLI 需要 `app/runtime/primary-runtime/...`，因此新链接直接指向有效的架构子目录。已有真实目录或指向其他有效目录的链接保留；冲突明确报错，不自动覆盖。实测范围和复现步骤见 [PR #78 验收记录](pr78-runtime-integrity.md)。
+
+### 旧 profile 的浮动下载地址阻塞其他插件（#164）
+
+症状是安装另一个插件时，pnpm 报错的地址却是 Purge 的 `releases/latest/download`。在插件页停用只会改变加载状态，profile 依赖仍会参与解析。
+
+取得包含此修复的发行包并按上文核对 SHA256 后，用该包解出的 `bin/community.js migrate <已校验的本地 tgz 路径>` 对原 profile 执行迁移。保留原 DSH_HOME 和 DSH_PROFILE。迁移器会把本项目已识别的旧浮动地址替换为本机持久归档，已停用的插件继续停用。迁移失败会恢复原清单；发生错误时保留报错用于诊断。
+
+### Windows 官方桌面更新交接（主分支）
+
+从 DSH 确认安装官方桌面更新后，社区版会在 desktop 和 web profile 中查找交接助手，兼容两个包名 `dsh-purge-community` 和 `dsh-purge`。普通单文件更新会先比对官方更新器提供的 SHA512、目标版本和 DeepSeek 的 Authenticode 发布者，等待桌面正常退出，再运行安装器。整个过程不自动重写更新后的宿主。
+
+如果更新后版本未变，可查看 `<DSH_HOME>/logs/official-installer/update-*/result.jsonl` 的最后一条记录。`waiting-for-exit` 表示助手仍在等原桌面进程退出，`failed` 会记录失败原因，`installed` 表示安装器返回成功，目标 EXE 的 FileVersion 也符合预期。分包和需要提权的安装由 DSH 官方更新器直接处理，请查看官方安装器日志。

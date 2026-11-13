@@ -90,9 +90,56 @@ test('Windows native sharing violation retries, permanent collision fails withou
     assert.equal(collision.observed.error.win32_code,183);
     assert.equal(collision.backupText,'existing backup');
     assert.equal(collision.originalExists,true);
+    const blocked=result.results.find(r=>r.scenario==='locked_state');
+    assert.equal(blocked.exited,true);
+    assert.equal(blocked.exitCode,1);
+    assert.equal(blocked.final?.phase,'starting','no acknowledgement was persisted');
+    assert.equal(blocked.backupExists,false);
+    assert.equal(fs.readFileSync(path.join(fixtureRoot,'locked_state.asar'),'utf8'),'original fixture');
+    const diagnostic=fs.readFileSync(path.join(fixtureRoot,'locked_state.asar.json.log'),'utf8');
+    assert.match(diagnostic,/failed_to_save_failure primary_hresult=-?\d+ primary_win32=\d+ state_write_hresult=-?\d+/);
     assert.equal(fs.readFileSync(path.join(fixtureRoot,'collision.asar'),'utf8'),'original fixture');
   } finally {
     fs.rmSync(root,{recursive:true,force:true});
     if(fixtureRoot) fs.rmSync(fixtureRoot,{recursive:true,force:true});
   }
+});
+
+for (const [scenario, script, exitCode] of [
+  ['script exits normally', 'exit 0', 0],
+  ['script returns nonzero to PowerShell', 'exit 5', 1],
+  ['PowerShell process exits with 5', '[Environment]::Exit(5)', 5],
+]) test(`Windows reports the helper process exit separately: ${scenario}`, {
+  skip: process.platform !== 'win32',
+}, async t => {
+  const {scheduleWindowsAsarHandoff} = await import('../lib/windows-asar-handoff.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'purge-no-ack-'));
+  t.after(() => fs.rmSync(dir, {recursive:true, force:true}));
+  const asar = path.join(dir, 'app.asar');
+  fs.writeFileSync(asar, 'original');
+  const statePath = asar + '.purge-handoff.json';
+  scheduleWindowsAsarHandoff({exe:process.execPath, asar}, {
+    spawn(command, args, options) {
+      const {token} = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+      const helper = path.join(os.tmpdir(), 'dsh-purge-handoff-' + token + '.ps1');
+      t.after(() => fs.rmSync(helper, {force:true}));
+      fs.writeFileSync(helper, script + '\n');
+      return spawn(command, args, options);
+    }
+  });
+  let state;
+  for (let i = 0; i < 200; i++) {
+    await wait(200);
+    state = readWindowsAsarHandoff(asar);
+    if (state?.phase === 'failed') break;
+  }
+  assert.equal(state?.phase, 'failed', JSON.stringify(state));
+  const log = fs.readFileSync(statePath + '.broker.log', 'utf8');
+  assert.match(log, /child_pid=[1-9]\d*/);
+  assert.match(log, /before acknowledging startup|did not acknowledge startup/);
+  assert.match(state.detail, /broker_exit_code=1/);
+  // On locked-down systems a short-lived helper may disappear before a handle opens.
+  const observed = /child_exit_code=(\d+|unknown)/.exec(log)?.[1];
+  assert.ok(observed === String(exitCode) || observed === 'unknown', log);
+  assert.equal(fs.readFileSync(asar, 'utf8'), 'original');
 });
